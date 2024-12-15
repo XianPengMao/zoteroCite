@@ -73,20 +73,28 @@ async function getServerUrl() {
         }
     }
 
-    // 如果都失败了，返回默认地址
-    return "http://localhost:23119";
+    throw new Error("无法连接到Zotero。请确保Zotero已启动，并检查连接地址设置。");
 }
 
+// 更新缓存机制
 let cachedServerUrl = null;
+let lastCheckTime = 0;
+const CACHE_TIMEOUT = 5000; // 5秒缓存超时
 
 async function getZoteroUrl() {
-    if (!cachedServerUrl) {
-        cachedServerUrl = await getServerUrl();
+    const now = Date.now();
+    if (!cachedServerUrl || (now - lastCheckTime) > CACHE_TIMEOUT) {
+        try {
+            cachedServerUrl = await getServerUrl();
+            lastCheckTime = now;
+        } catch (error) {
+            vscode.window.showErrorMessage(error.message);
+            throw error;
+        }
     }
     return cachedServerUrl;
 }
 
-// 更新现有的API调用
 async function updateUrls() {
     const baseUrl = await getZoteroUrl();
     return {
