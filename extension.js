@@ -7,37 +7,62 @@ const fs = require("fs");
 const { exec } = require('child_process');
 const bibtexParse = require("@orcid/bibtex-parse-js");
 
+// Constants
+const ZOTERO_PORT = 23119;
+const ZOTERO_PING_ENDPOINT = "/connector/ping";
+const WSL_CHECK_CMD = "wsl --status";
+
 async function getWSLHostIP() {
     return new Promise((resolve, reject) => {
-        exec('ipconfig', (error, stdout, stderr) => {
+        // 首先检查是否在WSL环境中
+        exec(WSL_CHECK_CMD, (error) => {
             if (error) {
-                console.error(`Error executing ipconfig: ${error}`);
+                console.log("Not in WSL environment");
                 resolve(null);
                 return;
             }
 
-            let ip = null;
-            const lines = stdout.split('\n');
-            let isRightAdapter = false;
-
-            for (const line of lines) {
-                if (line.includes('vEthernet') && line.includes('WSL')) {
-                    isRightAdapter = true;
-                } else if (isRightAdapter && line.includes('IPv4')) {
-                    ip = line.split(':')[1].trim();
-                    break;
+            // 获取WSL网络适配器IP
+            exec('ipconfig', (error, stdout, stderr) => {
+                if (error) {
+                    console.error(`Error executing ipconfig: ${error}`);
+                    resolve(null);
+                    return;
                 }
-            }
-            resolve(ip);
+
+                let ip = null;
+                const lines = stdout.split('\n');
+                let isRightAdapter = false;
+
+                for (const line of lines) {
+                    if (line.includes('vEthernet') && line.includes('WSL')) {
+                        isRightAdapter = true;
+                    } else if (isRightAdapter && line.includes('IPv4')) {
+                        ip = line.split(':')[1].trim();
+                        break;
+                    }
+                }
+
+                if (ip) {
+                    console.log(`Found WSL host IP: ${ip}`);
+                }
+                resolve(ip);
+            });
         });
     });
 }
 
 async function checkZoteroConnection(url) {
     try {
-        const response = await axios.get(`${url}/connector/ping`, { timeout: 2000 });
+        const response = await axios.get(`${url}${ZOTERO_PING_ENDPOINT}`, { 
+            timeout: 2000,
+            validateStatus: function (status) {
+                return status === 200;
+            }
+        });
         return response.status === 200;
     } catch (error) {
+        console.log(`Connection failed to ${url}: ${error.message}`);
         return false;
     }
 }
@@ -46,6 +71,7 @@ async function getServerUrl() {
     // 首先尝试从配置中获取
     const configUrl = vscode.workspace.getConfiguration("zotero-cite").get("serverUrl");
     if (configUrl) {
+        console.log(`Trying configured URL: ${configUrl}`);
         if (await checkZoteroConnection(configUrl)) {
             return configUrl;
         }
@@ -53,12 +79,13 @@ async function getServerUrl() {
 
     // 尝试常用地址
     const commonUrls = [
-        "http://localhost:23119",
-        "http://127.0.0.1:23119",
-        "http://host.docker.internal:23119"
+        `http://localhost:${ZOTERO_PORT}`,
+        `http://127.0.0.1:${ZOTERO_PORT}`,
+        `http://host.docker.internal:${ZOTERO_PORT}`
     ];
 
     for (const url of commonUrls) {
+        console.log(`Trying common URL: ${url}`);
         if (await checkZoteroConnection(url)) {
             return url;
         }
@@ -67,13 +94,22 @@ async function getServerUrl() {
     // 尝试WSL特定地址
     const wslHostIP = await getWSLHostIP();
     if (wslHostIP) {
-        const wslUrl = `http://${wslHostIP}:23119`;
+        const wslUrl = `http://${wslHostIP}:${ZOTERO_PORT}`;
+        console.log(`Trying WSL URL: ${wslUrl}`);
         if (await checkZoteroConnection(wslUrl)) {
             return wslUrl;
         }
     }
 
-    throw new Error("无法连接到Zotero。请确保Zotero已启动，并检查连接地址设置。");
+    // 尝试使用主机名.local
+    const hostname = require('os').hostname().toLowerCase();
+    const localUrl = `http://${hostname}.local:${ZOTERO_PORT}`;
+    console.log(`Trying hostname.local URL: ${localUrl}`);
+    if (await checkZoteroConnection(localUrl)) {
+        return localUrl;
+    }
+
+    throw new Error("无法连接到Zotero。请确保：\n1. Zotero已启动\n2. Better BibTeX插件已安装\n3. 如果使用WSL，请检查网络连接");
 }
 
 // 更新缓存机制
@@ -87,7 +123,9 @@ async function getZoteroUrl() {
         try {
             cachedServerUrl = await getServerUrl();
             lastCheckTime = now;
+            console.log(`Successfully connected to Zotero at: ${cachedServerUrl}`);
         } catch (error) {
+            console.error(`Failed to connect to Zotero: ${error.message}`);
             vscode.window.showErrorMessage(error.message);
             throw error;
         }
@@ -112,9 +150,9 @@ async function getServerUrl() {
   
   // 默认尝试几个可能的地址
   const possibleHosts = [
-    "http://localhost:23119",
-    "http://127.0.0.1:23119",
-    "http://host.docker.internal:23119"
+    `http://localhost:${ZOTERO_PORT}`,
+    `http://127.0.0.1:${ZOTERO_PORT}`,
+    `http://host.docker.internal:${ZOTERO_PORT}`
   ];
   
   return possibleHosts[0]; // 默认使用第一个地址
