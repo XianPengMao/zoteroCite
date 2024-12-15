@@ -1,0 +1,35 @@
+name: Package Extension
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v2
+      with:
+        node-version: '16'
+        
+    - name: Install dependencies
+      run: npm install
+      
+    - name: Install vsce
+      run: npm install -g @vscode/vsce
+      
+    - name: Package Extension
+      run: vsce package
+      
+    - name: Upload Extension Package
+      uses: actions/upload-artifact@v2
+      with:
+        name: extension
+        path: "*.vsix"
