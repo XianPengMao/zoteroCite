@@ -18,17 +18,19 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '18'
-        registry-url: 'https://registry.npmjs.org'
         
     - name: Configure npm
       run: |
-        npm config set registry https://registry.npmjs.org/
+        npm config set registry https://registry.npmmirror.com/
         npm config set strict-ssl false
+        npm config list
+        
+    - name: Clean npm cache
+      run: npm cache clean --force
         
     - name: Install dependencies
-      run: npm install
-      env:
-        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      run: |
+        npm install --verbose --no-audit
       
     - name: Install vsce
       run: npm install -g @vscode/vsce

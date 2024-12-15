@@ -124,11 +124,11 @@
 		"@vscode/test-electron": "^1.6.2"
 	},
 	"publishConfig": {
-		"registry": "https://registry.npmjs.org/"
+		"registry": "https://registry.npmmirror.com/"
 	},
 	"dependencies": {
 		"@orcid/bibtex-parse-js": "0.0.25",
-		"axios": "^0.24.0"
+		"axios": "^1.6.2"
 	},
 	"__metadata": {
 		"id": "92d25ab9-444d-4394-a0ef-4cfa5f705b73",
