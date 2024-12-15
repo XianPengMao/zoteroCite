@@ -4,10 +4,112 @@ const vscode = require("vscode");
 const axios = require("axios");
 const path = require("path");
 const fs = require("fs");
+const { exec } = require('child_process');
 const bibtexParse = require("@orcid/bibtex-parse-js");
 
-function getServerUrl() {
-  return vscode.workspace.getConfiguration("zotero-cite").get("serverUrl", "http://localhost:23119");
+async function getWSLHostIP() {
+    return new Promise((resolve, reject) => {
+        exec('ipconfig', (error, stdout, stderr) => {
+            if (error) {
+                console.error(`Error executing ipconfig: ${error}`);
+                resolve(null);
+                return;
+            }
+
+            let ip = null;
+            const lines = stdout.split('\n');
+            let isRightAdapter = false;
+
+            for (const line of lines) {
+                if (line.includes('vEthernet') && line.includes('WSL')) {
+                    isRightAdapter = true;
+                } else if (isRightAdapter && line.includes('IPv4')) {
+                    ip = line.split(':')[1].trim();
+                    break;
+                }
+            }
+            resolve(ip);
+        });
+    });
+}
+
+async function checkZoteroConnection(url) {
+    try {
+        const response = await axios.get(`${url}/connector/ping`, { timeout: 2000 });
+        return response.status === 200;
+    } catch (error) {
+        return false;
+    }
+}
+
+async function getServerUrl() {
+    // 首先尝试从配置中获取
+    const configUrl = vscode.workspace.getConfiguration("zotero-cite").get("serverUrl");
+    if (configUrl) {
+        if (await checkZoteroConnection(configUrl)) {
+            return configUrl;
+        }
+    }
+
+    // 尝试常用地址
+    const commonUrls = [
+        "http://localhost:23119",
+        "http://127.0.0.1:23119",
+        "http://host.docker.internal:23119"
+    ];
+
+    for (const url of commonUrls) {
+        if (await checkZoteroConnection(url)) {
+            return url;
+        }
+    }
+
+    // 尝试WSL特定地址
+    const wslHostIP = await getWSLHostIP();
+    if (wslHostIP) {
+        const wslUrl = `http://${wslHostIP}:23119`;
+        if (await checkZoteroConnection(wslUrl)) {
+            return wslUrl;
+        }
+    }
+
+    // 如果都失败了，返回默认地址
+    return "http://localhost:23119";
+}
+
+let cachedServerUrl = null;
+
+async function getZoteroUrl() {
+    if (!cachedServerUrl) {
+        cachedServerUrl = await getServerUrl();
+    }
+    return cachedServerUrl;
+}
+
+// 更新现有的API调用
+async function updateUrls() {
+    const baseUrl = await getZoteroUrl();
+    return {
+        json_rpc: `${baseUrl}/better-bibtex/json-rpc`,
+        cayw: `${baseUrl}/better-bibtex/cayw`
+    };
+}
+
+async function getServerUrl() {
+  // 首先尝试从配置中获取
+  const configUrl = vscode.workspace.getConfiguration("zotero-cite").get("serverUrl");
+  if (configUrl) {
+    return configUrl;
+  }
+  
+  // 默认尝试几个可能的地址
+  const possibleHosts = [
+    "http://localhost:23119",
+    "http://127.0.0.1:23119",
+    "http://host.docker.internal:23119"
+  ];
+  
+  return possibleHosts[0]; // 默认使用第一个地址
 }
 
 const json_rpc = `${getServerUrl()}/better-bibtex/json-rpc`;
@@ -182,76 +284,82 @@ async function insertTextAsync(text, location = -1) {
  * @returns string[]
  */
 async function pickCiteKeys() {
-  var citeKeys = [];
-  // params: {
-  //     "format": "pandoc",
-  //     "brackets": "1",
-  //     "minimize": 'true'
-  // }
-
-  await axios({
-    method: "get",
-    url: cayw,
-    params: {
-      format: "pandoc",
-      brackets: "1",
-      // minimize: true,
-      minimize: minimizeZotero()
-    },
-  })
-    .then((res) => {
-      // const pattern = /\[@([^\]]+)\]/g;
-      const pattern = /@([\w-:\d]+)/g;
-      while ((m = pattern.exec(res.data)) != null) {
-        citeKeys.push(m[1]);
-      }
-    })
-    .catch((err) => {
-      showErrorMessage(err.message);
-    });
-
-  // 代表没有选择item，抛出异常。
-  if (citeKeys.length == 0) {
-    throw new Error("No item is selected.");
-  }
-
-  return citeKeys;
+    try {
+        const urls = await updateUrls();
+        const response = await axios.get(urls.cayw + "?format=json");
+        return response.data;
+    } catch (error) {
+        vscode.window.showErrorMessage(`Failed to connect to Zotero: ${error.message}`);
+        return [];
+    }
 }
 
 /**
- * 对于markdown文件的书写，选择key，然后插入bibliography，
- * key的格式为：[^k1][^k2]
- * bibliography的格式：
- *   [^k1]: content
- *   [^k2]: content
+ * 在pandoc以及latex文档编写过程中，将key数组插入到文档中
+ * @param {string[]} keyList key数组
  */
-async function citeMarkdownBibliography() {
-  try {
-    // 获取键列表
-    var existKeys = getDocumentCiteKeys();
+async function insertCiteKeys(keyList) {
+  const editor = vscode.window.activeTextEditor;
+  var addLocation = getKeyEnvOffset();
 
-    // 获取键值
-    var citeKeys = await pickCiteKeys();
-
-    // insert markdown citation
-    insertText("[^" + citeKeys.join("][^") + "]");
-
-    // 插入插入bibliography，并过滤已经插入的
-    citeKeys.forEach((e) => {
-      if (!existKeys.includes(e)) {
-        insertMarkdownBibliography(e);
-      }
-    });
-  } catch (err) {
-    showErrorMessage(err.message);
+  // insert latex citation。
+  if (editor.document.languageId == "latex") {
+    if (addLocation == null) {
+      await insertTextAsync("\\cite{" + keyList.join(", ") + "}");
+    } else {
+      await insertTextAsync(", " + keyList.join(", "), addLocation - 1);
+    }
   }
+
+  // insert pandoc citation
+  if (editor.document.languageId == "markdown") {
+    if (addLocation == null) {
+      await insertTextAsync("[" + keyList.map((v) => "@" + v).join("; ") + "]");
+    } else {
+      await insertTextAsync(
+        "; " + keyList.map((v) => "@" + v).join("; "),
+        addLocation - 1
+      );
+    }
+  }
+}
+
+/**
+ * 给pandoc以及latex添加citation以及bibliography
+ */
+async function citeBibliography() {
+    const keys = await pickCiteKeys();
+    if (keys && keys.length > 0) {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            return;
+        }
+        await insertCiteKeys(keys);
+        
+        const urls = await updateUrls();
+        try {
+            const response = await axios.post(urls.json_rpc, {
+                jsonrpc: "2.0",
+                method: "bibliography",
+                params: [keys]
+            });
+            
+            if (response.data && response.data.result) {
+                const bibliography = response.data.result;
+                await insertTextAsync(bibliography, -2);
+            }
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to get bibliography: ${error.message}`);
+        }
+    }
 }
 
 /**
  * 根据item的key，插入markdown格式的bibliography
  * @param {string} citeKey item的Key
  */
-function insertMarkdownBibliography(citeKey) {
+async function insertMarkdownBibliography(citeKey) {
+  const urls = await updateUrls();
   const pyload = JSON.stringify({
     jsonrpc: "2.0",
     method: "item.bibliography",
@@ -265,7 +373,7 @@ function insertMarkdownBibliography(citeKey) {
 
   axios({
     method: "post",
-    url: json_rpc,
+    url: urls.json_rpc,
     headers: {
       "Content-Type": "application/json",
     },
@@ -316,112 +424,36 @@ function getBibliographyKeyFromFile(bibPath) {
 async function addCitation() {
   try {
     var citeKeys = await pickCiteKeys();
-    insertCiteKeys(citeKeys);
+    await insertCiteKeys(citeKeys);
   } catch (err) {
     showErrorMessage(err.message);
   }
 }
 
 /**
- * 在pandoc以及latex文档编写过程中，将key数组插入到文档中
- * @param {string[]} keyList key数组
+ * 对于markdown文件的书写，选择key，然后插入bibliography，
+ * key的格式为：[^k1][^k2]
+ * bibliography的格式：
+ *   [^k1]: content
+ *   [^k2]: content
  */
-function insertCiteKeys(keyList) {
-  const editor = vscode.window.activeTextEditor;
-  var addLocation = getKeyEnvOffset();
-
-  // insert latex citation。
-  if (editor.document.languageId == "latex") {
-    if (addLocation == null) {
-      insertText("\\cite{" + keyList.join(", ") + "}");
-    } else {
-      insertText(", " + keyList.join(", "), addLocation - 1);
-    }
-  }
-
-  // insert pandoc citation
-  if (editor.document.languageId == "markdown") {
-    if (addLocation == null) {
-      insertText("[" + keyList.map((v) => "@" + v).join("; ") + "]");
-    } else {
-      insertText(
-        "; " + keyList.map((v) => "@" + v).join("; "),
-        addLocation - 1
-      );
-    }
-  }
-}
-
-/**
- * 给pandoc以及latex添加citation以及bibliography
- */
-async function citeBibliography() {
+async function citeMarkdownBibliography() {
   try {
-    const editor = vscode.window.activeTextEditor;
-    var currentlyOpenTabfilePath = editor.document.uri.fsPath;
+    // 获取键列表
+    var existKeys = getDocumentCiteKeys();
 
-    // Current file tab is not saved.
-    if (currentlyOpenTabfilePath.indexOf("Untitled") != -1) {
-      throw new Error("Please SAVE Current Tab.");
-    }
-
-    // 得到bib文件的默认文件名
-    const bibName = defaultBibName();
-
-    if (bibName.length < 5 || path.extname(bibName) != ".bib") {
-      throw new Error("bibName is invalid or its length is less than 5.");
-    }
-
-    let bibName_replaced = bibName;
-    // 替换bibName中的${workspaceFolder}为工作目录的路径
-    bibName_replaced = bibName_replaced.replace("${workspaceFolder}", vscode.workspace.rootPath);
-    // 替换bibName中的${fileBasename}为当前文件的文件名
-    bibName_replaced = bibName_replaced.replace("${fileBasename}", path.basename(currentlyOpenTabfilePath));
-    // 替换bibName中的${fileBasenameNoExtension}为当前文件的文件名，不带后缀
-    bibName_replaced = bibName_replaced.replace("${fileBasenameNoExtension}", path.basename(currentlyOpenTabfilePath, ".bib"));
-    // 替换bibName中的${fileDirname}为当前文件的目录名
-    bibName_replaced = bibName_replaced.replace("${fileDirname}", path.dirname(currentlyOpenTabfilePath));
-    // 替换bibName中的${fileExtname}为当前文件的后缀名
-    bibName_replaced = bibName_replaced.replace("${fileExtname}", path.extname(currentlyOpenTabfilePath));
-    // 替换bibName中的${fileBasenameNoExtension}为当前文件的文件名，不带后缀
-    bibName_replaced = bibName_replaced.replace("${fileBasenameNoExtension}", path.basename(currentlyOpenTabfilePath, ".bib"));
-
-    let bibPath = bibName_replaced;
-    if(path.isAbsolute(bibName_replaced)) {
-      // bibPath = bibName_replaced;
-    } else {      
-      bibPath = path.join(path.dirname(currentlyOpenTabfilePath), bibName_replaced);
-    }
-
-    // get selected keys
+    // 获取键值
     var citeKeys = await pickCiteKeys();
-    insertCiteKeys(citeKeys);
 
-    // 根据bib文件，而不是cite去获取keys。
-    var bibKeys = getBibliographyKeyFromFile(bibPath);
+    // insert markdown citation
+    await insertTextAsync("[^" + citeKeys.join("][^") + "]");
 
-    // 过滤已经包含的引用
-    var uniqueKeys = citeKeys.filter((v, i) => !bibKeys.includes(v));
-
-    // 如果为空，代表不需要添加内容的bib文件里边
-    if (uniqueKeys.length == 0) {
-      return;
-    }
-
-    getBibliography(uniqueKeys)
-      .then((res) => {
-        fs.writeFileSync(bibPath, res + "\n", {
-          flag: "a",
-          encoding: "utf8",
-        });
-      })
-      .catch((err) => {
-        if (err instanceof vscode.CancellationError) {
-          showStatusMessage("Bibliography 导出已取消");
-          return;
-        }
-        showErrorMessage(err.message);
-      });
+    // 插入插入bibliography，并过滤已经插入的
+    citeKeys.forEach((e) => {
+      if (!existKeys.includes(e)) {
+        insertMarkdownBibliography(e);
+      }
+    });
   } catch (err) {
     showErrorMessage(err.message);
   }

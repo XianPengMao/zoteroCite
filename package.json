@@ -69,43 +69,40 @@
 				}
 			]
 		},
-		"configuration": [
-			{
-				"type": "object",
-				"title": "Zotero Cite",
-				"properties": {
-					"zotero-cite.serverUrl": {
-						"type": "string",
-						"default": "http://localhost:23119",
-						"description": "Zotero\u670d\u52a1\u5668\u5730\u5740\uff0cWSL2\u73af\u5883\u4e4b\u53ef\u8bbe\u7f6e\u4e3a http://[Windows \u540d\u7a31\u5728 WSL].local:23119"
-					},
-					"zotero-cite.bibliograpyStyle": {
-						"type": "string",
-						"default": "http://www.zotero.org/styles/apa",
-						"description": "URL of bibliography style, see: https://www.zotero.org/styles",
-						"scope": "window"
-					},
-					"zotero-cite.defaultBibName": {
-						"type": "string",
-						"default": "ref.bib",
-						"scope": "window",
-						"description": "Default bib file name"
-					},
-					"zotero-cite.latexBibStyle": {
-						"type": "string",
-						"default": "bibtex",
-						"scope": "window",
-						"description": "LaTeX bibliography style, bibtex or biblatex"
-					},
-					"zotero-cite.minimizeZotero": {
-						"type": "string",
-						"default": "",
-						"scope": "window",
-						"description": "Any non-empty value will minimize the Zotero window after citation"
-					}
+		"configuration": {
+			"title": "Zotero Cite",
+			"properties": {
+				"zotero-cite.serverUrl": {
+					"type": "string",
+					"default": "",
+					"description": "Zotero\u670d\u52a1\u5668\u5730\u5740\uff0c\u7a81\u672c\u53ef\u81ea\u52a8\u68c0\u6d4b\uff0c\u6216\u8005\u624b\u52a8\u8bbe\u7f6e\u4e3a\u4eec\u4e0b\u4e00\u4e2a\u5730\u5740\uff1a\n1. http://localhost:23119\n2. http://127.0.0.1:23119\n3. http://host.docker.internal:23119\n4. http://[WSL IP]:23119"
+				},
+				"zotero-cite.bibliograpyStyle": {
+					"type": "string",
+					"default": "http://www.zotero.org/styles/apa",
+					"description": "URL of bibliography style, see: https://www.zotero.org/styles",
+					"scope": "window"
+				},
+				"zotero-cite.defaultBibName": {
+					"type": "string",
+					"default": "ref.bib",
+					"scope": "window",
+					"description": "Default bib file name"
+				},
+				"zotero-cite.latexBibStyle": {
+					"type": "string",
+					"default": "bibtex",
+					"scope": "window",
+					"description": "LaTeX bibliography style, bibtex or biblatex"
+				},
+				"zotero-cite.minimizeZotero": {
+					"type": "string",
+					"default": "",
+					"scope": "window",
+					"description": "Any non-empty value will minimize the Zotero window after citation"
 				}
 			}
-		]
+		}
 	},
 	"scripts": {
 		"lint": "eslint .",
